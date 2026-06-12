@@ -416,6 +416,27 @@
       left: 15px;
     }
   }
+  /* Display Editing Styles */
+#display[contenteditable="true"] {
+  outline: none;
+  cursor: text;
+  caret-color: var(--screen-text);
+}
+#display[contenteditable="true"]:empty::before {
+  content: attr(data-placeholder);
+  color: #7a8478;
+  pointer-events: none;
+}
+#display[contenteditable="true"]:focus {
+  background: rgba(0,0,0,0.03);
+}
+#display[contenteditable="true"] br {
+  display: none;
+}
+#display[contenteditable="true"] * {
+  display: inline;
+  white-space: pre;
+} 
 </style>
 </head>
 <body>
@@ -802,7 +823,7 @@
         <span id="angle-mode">DEG</span>
         <span id="memory-display">M:0</span>
       </div>
-      <div id="display"></div>
+      <div id="display" contenteditable="true" spellcheck="false" data-placeholder="0"></div>
       <div id="result">0</div>
     </div>
 
@@ -869,7 +890,6 @@
 </div>
 
 <script>
-
 Decimal.set({ precision: 34, toExpNeg: -9, toExpPos: 50 });
 
 /** String literals for tokenizer — hindari parseFloat / Number agar presisi tidak bocor */
@@ -878,6 +898,7 @@ const DEC_PI_STR =
 const DEC_EULER_STR =
   '2.7182818284590452353602874713526624977572470936999595749669676277';
 
+/** ==================== DMS VALUE CLASS ==================== */
 class DMSValue {
   constructor(deg = 0, min = 0, sec = 0, sign = 1) {
     this.deg = Math.floor(Math.abs(deg));
@@ -900,14 +921,8 @@ class DMSValue {
     
     this.sec = Math.round(this.sec * 100) / 100;
     
-    if (this.sec >= 60) {
-      this.sec -= 60;
-      this.min += 1;
-    }
-    if (this.min >= 60) {
-      this.min -= 60;
-      this.deg += 1;
-    }
+    if (this.sec >= 60) { this.sec -= 60; this.min += 1; }
+    if (this.min >= 60) { this.min -= 60; this.deg += 1; }
   }
   
   toDecimal() {
@@ -919,127 +934,99 @@ class DMSValue {
     const v = (decimal instanceof Decimal) ? decimal.toNumber() : Number(decimal);
     const sign = v < 0 ? -1 : 1;
     const absDecimal = Math.abs(v);
-    const deg = Math.floor(absDecimal);
-    const minFloat = (absDecimal - deg) * 60;
-    const min = Math.floor(minFloat);
-    const sec = (minFloat - min) * 60;
+    
+    // Presisi tinggi: hitung total detik lalu pecah
+    const totalSeconds = Math.round(absDecimal * 3600 * 100) / 100;
+    const deg = Math.floor(totalSeconds / 3600);
+    const remainingSec = totalSeconds % 3600;
+    const min = Math.floor(remainingSec / 60);
+    const sec = Math.round((remainingSec % 60) * 100) / 100;
+    
     return new DMSValue(deg, min, sec, sign);
   }
   
   toResultString() {
     const sign = this.sign < 0 ? '-' : '';
-    if (this.sec === 0 && this.min === 0) {
-      return `${sign}${this.deg}°`;
-    } else if (this.sec === 0) {
-      return `${sign}${this.deg}°${this.min}'`;
-    }
+    if (this.sec === 0 && this.min === 0) return `${sign}${this.deg}°`;
+    if (this.sec === 0) return `${sign}${this.deg}°${this.min}'`;
     return `${sign}${this.deg}°${this.min}'${this.sec}"`;
   }
   
-  toString() {
-    return this.toResultString();
-  }
+  toString() { return this.toResultString(); }
   
   add(other) {
-    if (other instanceof DMSValue) {
-      const result = this.toDecimal() + other.toDecimal();
-      return DMSValue.fromDecimal(result);
-    }
-    const result = this.toDecimal() + other;
-    return DMSValue.fromDecimal(result);
+    if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() + other.toDecimal());
+    return DMSValue.fromDecimal(this.toDecimal() + other);
   }
-  
   subtract(other) {
-    if (other instanceof DMSValue) {
-      const result = this.toDecimal() - other.toDecimal();
-      return DMSValue.fromDecimal(result);
-    }
-    const result = this.toDecimal() - other;
-    return DMSValue.fromDecimal(result);
+    if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() - other.toDecimal());
+    return DMSValue.fromDecimal(this.toDecimal() - other);
   }
-  
   multiply(other) {
-    if (other instanceof DMSValue) {
-      const result = this.toDecimal() * other.toDecimal();
-      return DMSValue.fromDecimal(result);
-    }
-    const result = this.toDecimal() * other;
-    return DMSValue.fromDecimal(result);
+    if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() * other.toDecimal());
+    return DMSValue.fromDecimal(this.toDecimal() * other);
   }
-  
   divide(other) {
-    if (other instanceof DMSValue) {
-      const result = this.toDecimal() / other.toDecimal();
-      return DMSValue.fromDecimal(result);
-    }
-    const result = this.toDecimal() / other;
-    return DMSValue.fromDecimal(result);
+    if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() / other.toDecimal());
+    return DMSValue.fromDecimal(this.toDecimal() / other);
   }
 }
 
+/** ==================== TOKENIZER & PARSER ==================== */
 class Token {
   constructor(type, value, isDMS = false) {
-    this.type = type;  // 'NUMBER', 'OPERATOR', 'FUNCTION', 'LPAREN', 'RPAREN', 'DMS', 'UNARY', 'FACTORIAL'
-    this.value = value;
-    this.isDMS = isDMS;  // Apakah token ini bagian dari DMS value
+    this.type = type; this.value = value; this.isDMS = isDMS;
   }
 }
 
 function tokenize(expr) {
   const tokens = [];
   let i = 0;
-  
   expr = expr.replace(/\s+/g, '');
   
   while (i < expr.length) {
     let char = expr[i];
     
+    // 1. Unary Minus Shortcut (-)
     if (expr.substring(i, i + 3) === '(-)') {
       tokens.push(new Token('UNARY', '-'));
-      i += 3;
-      continue;
+      i += 3; continue;
     }
-    // nPr / nCr operators
-    if (expr.substring(i, i + 3) === 'nPr') {
-      tokens.push(new Token('OPERATOR', 'nPr'));
-      i += 3;
-      continue;
-    }
-    if (expr.substring(i, i + 3) === 'nCr') {
-      tokens.push(new Token('OPERATOR', 'nCr'));
-      i += 3;
-      continue;
-    }
+    // nPr / nCr
+    if (expr.substring(i, i + 3) === 'nPr') { tokens.push(new Token('OPERATOR', 'nPr')); i += 3; continue; }
+    if (expr.substring(i, i + 3) === 'nCr') { tokens.push(new Token('OPERATOR', 'nCr')); i += 3; continue; }
     
-    const dmsMatch = expr.substring(i).match(/^(\d+(?:\.\d+)?)°(\d+(?:\.\d+)?)?'?(\d+(?:\.\d+)?)?"?/);
+    // 2. DMS Input: -?deg°min'sec"
+    const dmsMatch = expr.substring(i).match(/^(-?)(\d+(?:\.\d+)?)°(\d+(?:\.\d+)?)?'?(?:(\d+(?:\.\d+)?)?")?/);
     if (dmsMatch) {
-      const deg = parseFloat(dmsMatch[1]) || 0;
-      const min = parseFloat(dmsMatch[2]) || 0;
-      const sec = parseFloat(dmsMatch[3]) || 0;
-      // Serap UNARY minus sebelumnya langsung ke sign DMS
-      let sign = 1;
+      const sign = dmsMatch[1] === '-' ? -1 : 1;
+      const deg = parseFloat(dmsMatch[2]) || 0;
+      const min = parseFloat(dmsMatch[3]) || 0;
+      const sec = parseFloat(dmsMatch[4]) || 0;
+      
+      // Serap UNARY minus sebelumnya jika ada
+      let signFinal = (dmsMatch[1] === '-') ? -1 : 1;
       if (tokens.length > 0 && tokens[tokens.length - 1].type === 'UNARY' && tokens[tokens.length - 1].value === '-') {
-        sign = -1;
-        tokens.pop(); // hapus token UNARY minus, sudah diserap ke DMS
+        tokens.pop();
+        signFinal = -1;
+      } else {
+        signFinal = dmsMatch[1] === '-' ? -1 : 1;
       }
-      const dmsValue = new DMSValue(deg, min, sec, sign);
+      
+      const dmsValue = new DMSValue(parseFloat(dmsMatch[2])||0, parseFloat(dmsMatch[3])||0, parseFloat(dmsMatch[4])||0, signFinal);
       tokens.push(new Token('DMS', dmsValue, true));
       i += dmsMatch[0].length;
       continue;
     }
     
+    // 3. Number (termasuk scientific notation)
     if (/\d/.test(char) || (char === '.' && i + 1 < expr.length && /\d/.test(expr[i + 1]))) {
       let numStr = '';
-      while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) {
-        numStr += expr[i];
-        i++;
-      }
+      while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) { numStr += expr[i]; i++; }
       if (i < expr.length && (expr[i] === 'e' || expr[i] === 'E')) {
         const afterE = expr.substring(i + 1);
         const sciMatch = afterE.match(/^[+\-]?\d+/);
-        if (!sciMatch) {
-          throw new Error('Notasi ilmiah tidak lengkap (contoh: 1e3, 2.5E-4)');
-        }
+        if (!sciMatch) throw new Error('Notasi ilmiah tidak lengkap (contoh: 1e3, 2.5E-4)');
         numStr += expr[i] + sciMatch[0];
         i += 1 + sciMatch[0].length;
       }
@@ -1047,95 +1034,76 @@ function tokenize(expr) {
       continue;
     }
     
-    const funcMatch = expr.substring(i).match(/^(pow10|sin⁻¹|cos⁻¹|tan⁻¹|sin|cos|tan|log|ln|sqrt|cbrt|exp|abs|floor|ceil|round)/);
-    if (funcMatch) {
-      tokens.push(new Token('FUNCTION', funcMatch[0]));
-      i += funcMatch[0].length;
-      continue;
-    }
-    
-    if (expr.substring(i, i + 1) === 'π') {
-      tokens.push(new Token('NUMBER', DEC_PI_STR));
-      i++;
-      continue;
-    }
+    // 3b. Constants π, e
+    if (expr.substring(i, i + 1) === 'π') { tokens.push(new Token('NUMBER', DEC_PI_STR)); i++; continue; }
     if (expr.substring(i, i + 1) === 'e' && (i + 1 >= expr.length || !/[a-z]/.test(expr[i + 1]))) {
-      tokens.push(new Token('NUMBER', DEC_EULER_STR));
-      i++;
-      continue;
+      tokens.push(new Token('NUMBER', DEC_EULER_STR)); i++; continue;
     }
     
+    // 4. Functions (longest match first)
+    const funcMatch = expr.substring(i).match(/^(pow10|sin⁻¹|cos⁻¹|tan⁻¹|sin|cos|tan|log|ln|sqrt|cbrt|exp|abs|floor|ceil|round)/);
+    if (funcMatch) { tokens.push(new Token('FUNCTION', funcMatch[0])); i += funcMatch[0].length; continue; }
+    
+    // 4b. Constants π, e (string literal)
+    if (expr.substring(i, i + 1) === 'π') { tokens.push(new Token('NUMBER', DEC_PI_STR)); i++; continue; }
+    if (expr.substring(i, i + 1) === 'e' && (i + 1 >= expr.length || !/[a-z]/.test(expr[i + 1]))) {
+      tokens.push(new Token('NUMBER', DEC_EULER_STR)); i++; continue;
+    }
+    
+    // 5. Ans / Variables
     if (expr.substring(i, i + 3) === 'Ans') {
       if (tokens.length > 0) {
-        const lastToken = tokens[tokens.length - 1];
-        if (lastToken.type === 'NUMBER' || lastToken.type === 'DMS' || lastToken.type === 'RPAREN') {
-          tokens.push(new Token('OPERATOR', '*'));
-        }
+        const last = tokens[tokens.length - 1];
+        if (['NUMBER', 'DMS', 'RPAREN'].includes(last.type)) tokens.push(new Token('OPERATOR', '*'));
       }
       tokens.push(new Token('NUMBER', state.lastAnswer.toString()));
       i += 3;
-      const nextChar = i < expr.length ? expr[i] : '';
-      if (nextChar === '(' || /\d/.test(nextChar) || nextChar === 'π') {
-        tokens.push(new Token('OPERATOR', '*'));
-      }
+      const next = i < expr.length ? expr[i] : '';
+      if (next === '(' || /\d/.test(next) || next === 'π') tokens.push(new Token('OPERATOR', '*'));
       continue;
     }
-
     const varMatch = expr.substring(i).match(/^(A|B|C|D|F|x|y|M)/);
     if (varMatch) {
-      const vName = varMatch[1];
-      if (state.variables[vName] === undefined || state.variables[vName] === null) {
-        throw new Error(`Variabel ${vName} belum ada`);
-      }
-      tokens.push(new Token('NUMBER', state.variables[vName].toString()));
-      i += vName.length;
-      continue;
+      const key = varMatch[1];
+      if (state.variables[key] === undefined) throw new Error(`Variabel ${key} belum ada`);
+      tokens.push(new Token('NUMBER', state.variables[key].toString()));
+      i += varMatch[1].length; continue;
     }
     
-    if (char === '(') {
-      tokens.push(new Token('LPAREN', '('));
-      i++;
-      continue;
-    }
-    if (char === ')') {
-      tokens.push(new Token('RPAREN', ')'));
-      i++;
-      continue;
-    }
+    // 6. Parentheses
+    if (char === '(') { tokens.push(new Token('LPAREN', '(')); i++; continue; }
+    if (char === ')') { tokens.push(new Token('RPAREN', ')')); i++; continue; }
     
+    // 7. Operators
     if (['+', '-', '*', '/', '^', '×', '÷', '−'].includes(char)) {
       if (char === '×') char = '*';
       if (char === '÷') char = '/';
       if (char === '−') char = '-';
       
+      // UNARY jika di awal, setelah operator, (, atau FUNCTION
       if ((char === '-' || char === '+') && (
           tokens.length === 0 || 
           tokens[tokens.length - 1].type === 'OPERATOR' || 
-          tokens[tokens.length - 1].type === 'LPAREN')) {
+          tokens[tokens.length - 1].type === 'LPAREN' ||
+          tokens[tokens.length - 1].type === 'FUNCTION')) {
         tokens.push(new Token('UNARY', char));
       } else {
         tokens.push(new Token('OPERATOR', char));
       }
-      i++;
-      continue;
+      i++; continue;
     }
     
-    if (char === '!') {
-      tokens.push(new Token('FACTORIAL', '!'));
-      i++;
-      continue;
-    }
+    if (char === '!') { tokens.push(new Token('FACTORIAL', '!')); i++; continue; }
     
-    throw new Error(`Karakter tidak dikenal: ${char} pada posisi ${i}`);
+    throw new Error(`Karakter tidak dikenal: ${char} di posisi ${i}`);
   }
   
-  // Post-processing: perkalian implisit
+  // Implicit Multiplication: 2(3), 2π, )(, )sin
   const processed = [];
   for (let j = 0; j < tokens.length; j++) {
     processed.push(tokens[j]);
     if (j + 1 < tokens.length) {
-      const curr = tokens[j];
-      const next = tokens[j + 1];
+      const curr = tokens[j], next = tokens[j + 1];
       const endTypes = ['NUMBER', 'DMS', 'RPAREN', 'FACTORIAL'];
       const startTypes = ['NUMBER', 'DMS', 'LPAREN', 'FUNCTION'];
       if (endTypes.includes(curr.type) && startTypes.includes(next.type)) {
@@ -1147,360 +1115,311 @@ function tokenize(expr) {
 }
 
 function parse(tokens) {
-  const output = [];
-  const operators = [];
-  
-  const precedence = {
-    '+': 1,
-    '-': 1,
-    '*': 2,
-    '/': 2,
-    'nPr': 2,
-    'nCr': 2,
-    '^': 3,
-    'UNARY': 4,
-    'FACTORIAL': 5
-  };
-  
+  const output = [], operators = [];
+  const precedence = { '+':1, '-':1, '*':2, '/':2, 'nPr':2, 'nCr':2, '^':3, 'UNARY':4, 'FACTORIAL':5 };
   const rightAssoc = ['^', 'UNARY'];
   
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    
-    if (token.type === 'NUMBER' || token.type === 'DMS') {
-      output.push(token);
-    }
-    else if (token.type === 'FUNCTION') {
-      operators.push(token);
-    }
+  for (const token of tokens) {
+    if (token.type === 'NUMBER' || token.type === 'DMS') output.push(token);
+    else if (token.type === 'FUNCTION') operators.push(token);
     else if (token.type === 'OPERATOR') {
-      while (operators.length > 0) {
+      while (operators.length) {
         const top = operators[operators.length - 1];
         if (top.type === 'LPAREN') break;
-        
-        const topPrec = top.type === 'FUNCTION' ? 10 : precedence[top.value] || precedence[top.type] || 0;
+        const topPrec = top.type === 'FUNCTION' ? 10 : (precedence[top.value] || precedence[top.type] || 0);
         const currPrec = precedence[token.value] || 0;
-        
-        if (topPrec > currPrec || (topPrec === currPrec && !rightAssoc.includes(token.value))) {
-          output.push(operators.pop());
-        } else {
-          break;
-        }
+        if (topPrec > currPrec || (topPrec === currPrec && !['^', 'UNARY'].includes(token.value))) output.push(operators.pop());
+        else break;
       }
       operators.push(token);
     }
-    else if (token.type === 'UNARY' || token.type === 'FACTORIAL') {
-      operators.push(token);
-    }
-    else if (token.type === 'LPAREN') {
-      operators.push(token);
-    }
+    else if (token.type === 'UNARY' || token.type === 'FACTORIAL') operators.push(token);
+    else if (token.type === 'LPAREN') operators.push(token);
     else if (token.type === 'RPAREN') {
-      while (operators.length > 0 && operators[operators.length - 1].type !== 'LPAREN') {
-        output.push(operators.pop());
-      }
-      if (operators.length === 0) {
-        throw new Error('Kurung tidak seimbang');
-      }
-      operators.pop(); // Remove LPAREN
-      
-      if (operators.length > 0 && operators[operators.length - 1].type === 'FUNCTION') {
-        output.push(operators.pop());
-      }
+      while (operators.length && operators[operators.length - 1].type !== 'LPAREN') output.push(operators.pop());
+      if (!operators.length) throw new Error('Kurung tidak seimbang');
+      operators.pop(); // pop LPAREN
+      if (operators.length && operators[operators.length - 1].type === 'FUNCTION') output.push(operators.pop());
     }
   }
-  
-  while (operators.length > 0) {
+  while (operators.length) {
     const op = operators.pop();
-    if (op.type === 'LPAREN' || op.type === 'RPAREN') {
-      throw new Error('Kurung tidak seimbang');
-    }
+    if (op.type === 'LPAREN' || op.type === 'RPAREN') throw new Error('Kurung tidak seimbang');
     output.push(op);
   }
-  
   return output;
 }
 
-  function evaluate(postfix) {
-    const stack = [];
+function evaluate(postfix) {
+  const stack = [];
+  const angleMode = state.angleMode;
+  const toRad = (v) => angleMode === 'DEG' ? v * Math.PI / 180 : (angleMode === 'GRAD' ? v * Math.PI / 200 : v);
+  const fromRad = (v) => angleMode === 'DEG' ? v * 180 / Math.PI : (angleMode === 'GRAD' ? v * 200 / Math.PI : v);
 
-    const toRad = (v) => {
-      if (state.angleMode === 'DEG') return v * Math.PI / 180;
-      if (state.angleMode === 'GRAD') return v * Math.PI / 200;
-      return v;
-    };
-    const fromRad = (v) => {
-      if (state.angleMode === 'DEG') return v * 180 / Math.PI;
-      if (state.angleMode === 'GRAD') return v * 200 / Math.PI;
-      return v;
-    };
-
-    for (const token of postfix) {
-      if (token.type === 'NUMBER') {
-        stack.push(new Decimal(token.value));
-      }
-      else if (token.type === 'DMS') {
-        stack.push(new Decimal(token.value.toDecimal()));
-      }
-      else if (token.type === 'UNARY') {
-        if (stack.length < 1) throw new Error('Operand kurang untuk unary operator');
-        const a = stack.pop();
-        stack.push(token.value === '-' ? a.negated() : a);
-      }
-      else if (token.type === 'OPERATOR') {
-        if (stack.length < 2) throw new Error('Operand kurang untuk ' + token.value);
-        const b = stack.pop();
-        const a = stack.pop();
-        let result;
-        switch (token.value) {
-          case '+': result = a.plus(b); break;
-          case '-': result = a.minus(b); break;
-          case '*': result = a.times(b); break;
-          case '/':
-            if (b.isZero()) throw new Error('Pembagian dengan nol');
-            result = a.div(b); break;
-          case '^': result = a.pow(b); break;
-          case 'nPr': {
-            const n = a.toNumber(), r = b.toNumber();
-            if (!Number.isInteger(n) || !Number.isInteger(r) || r < 0 || n < r)
-              throw new Error('nPr tidak valid: 0 ≤ r ≤ n, bilangan bulat');
-            let res = new Decimal(1);
-            for (let k = n; k > n - r; k--) res = res.times(k);
-            result = res; break;
-          }
-          case 'nCr': {
-            const n = a.toNumber(), r = b.toNumber();
-            if (!Number.isInteger(n) || !Number.isInteger(r) || r < 0 || n < r)
-              throw new Error('nCr tidak valid: 0 ≤ r ≤ n, bilangan bulat');
-            let res = new Decimal(1);
-            for (let k = 0; k < r; k++) res = res.times(n - k).div(k + 1);
-            result = res; break;
-          }
-          default: throw new Error('Operator tidak dikenal: ' + token.value);
-        }
-        stack.push(result);
-      }
-      else if (token.type === 'FACTORIAL') {
-        if (stack.length < 1) throw new Error('Operand kurang untuk faktorial');
-        const n = stack.pop().toNumber();
-        if (n < 0 || !Number.isInteger(n) || n > 170)
-          throw new Error('Faktorial: hanya 0–170, bilangan bulat');
-        let result = new Decimal(1);
-        for (let i = 2; i <= n; i++) result = result.times(i);
-        stack.push(result);
-      }
-      else if (token.type === 'FUNCTION') {
-        if (stack.length < 1) throw new Error('Argumen kurang untuk ' + token.value);
-        const arg = stack.pop();
-        const argN = arg.toNumber();
-        let result;
-        switch (token.value) {
-          case 'sin': result = new Decimal(Math.sin(toRad(argN))); break;
-          case 'cos': result = new Decimal(Math.cos(toRad(argN))); break;
-          case 'tan': {
-            const cv = Math.cos(toRad(argN));
-            if (Math.abs(cv) < 1e-10) throw new Error('tan tidak terdefinisi (90°/270°)');
-            result = new Decimal(Math.tan(toRad(argN))); break;
-          }
-          case 'sin⁻¹':
-            if (argN < -1 || argN > 1) throw new Error('Domain asin: [-1, 1]');
-            result = new Decimal(fromRad(Math.asin(argN))); break;
-          case 'cos⁻¹':
-            if (argN < -1 || argN > 1) throw new Error('Domain acos: [-1, 1]');
-            result = new Decimal(fromRad(Math.acos(argN))); break;
-          case 'tan⁻¹':
-            result = new Decimal(fromRad(Math.atan(argN))); break;
-          case 'log':
-            if (argN <= 0) throw new Error('log domain: x > 0');
-            result = new Decimal(Math.log10(argN)); break;
-          case 'ln':
-            if (argN <= 0) throw new Error('ln domain: x > 0');
-            result = new Decimal(Math.log(argN)); break;
-          case 'pow10':
-            result = new Decimal(10).pow(arg); break;
-          case 'exp':
-            result = new Decimal(Math.exp(argN)); break;
-          case 'sqrt':
-            if (argN < 0) throw new Error('sqrt domain: x ≥ 0');
-            result = arg.sqrt(); break;
-          case 'cbrt':
-            result = new Decimal(Math.cbrt(argN)); break;
-          case 'abs': result = arg.abs(); break;
-          case 'floor': result = arg.floor(); break;
-          case 'ceil': result = arg.ceil(); break;
-          case 'round': result = arg.round(); break;
-          default: throw new Error('Fungsi tidak dikenal: ' + token.value);
-        }
-        stack.push(result);
-      }
+  for (const token of postfix) {
+    if (token.type === 'NUMBER') stack.push(new Decimal(token.value));
+    else if (token.type === 'DMS') stack.push(new Decimal(token.value.toDecimal()));
+    else if (token.type === 'UNARY') {
+      if (stack.length < 1) throw new Error('Operand kurang untuk unary');
+      stack.push(token.value === '-' ? stack.pop().negated() : stack.pop());
     }
-
-    if (stack.length !== 1) throw new Error('Ekspresi tidak valid');
-    return stack[0]; // Return Decimal — preserve full precision
+    else if (token.type === 'OPERATOR') {
+      if (stack.length < 2) throw new Error('Operand kurang untuk ' + token.value);
+      const b = stack.pop(), a = stack.pop();
+      let result;
+      switch (token.value) {
+        case '+': result = a.plus(b); break;
+        case '-': result = a.minus(b); break;
+        case '*': result = a.times(b); break;
+        case '/': if (b.isZero()) throw new Error('Pembagian dengan nol'); result = a.div(b); break;
+        case '^': result = a.pow(b); break;
+        case 'nPr': {
+          const n = a.toNumber(), r = b.toNumber();
+          if (!Number.isInteger(n) || !Number.isInteger(r) || r < 0 || n < r) throw new Error('nPr: 0 ≤ r ≤ n, integer');
+          let res = new Decimal(1);
+          for (let k = n; k > n - r; k--) res = res.times(k);
+          result = res; break;
+        }
+        case 'nCr': {
+          const n = a.toNumber(), r = b.toNumber();
+          if (!Number.isInteger(n) || !Number.isInteger(r) || r < 0 || n < r) throw new Error('nCr: 0 ≤ r ≤ n, integer');
+          let res = new Decimal(1);
+          for (let k = 0; k < r; k++) res = res.times(n - k).div(k + 1);
+          result = res; break;
+        }
+        default: throw new Error('Operator unknown: ' + token.value);
+      }
+      stack.push(result);
+    }
+    else if (token.type === 'FACTORIAL') {
+      const n = stack.pop().toNumber();
+      if (n < 0 || !Number.isInteger(n) || n > 170) throw new Error('Faktorial: 0-170 integer');
+      let result = new Decimal(1); for (let i = 2; i <= n; i++) result = result.times(i);
+      stack.push(result);
+    }
+    else if (token.type === 'FUNCTION') {
+      if (stack.length < 1) throw new Error('Argumen kurang untuk ' + token.value);
+      const arg = stack.pop(), argN = arg.toNumber();
+      let result;
+      const toRad = (v) => state.angleMode === 'DEG' ? v * Math.PI / 180 : (state.angleMode === 'GRAD' ? v * Math.PI / 200 : v);
+      const fromRad = (v) => state.angleMode === 'DEG' ? v * 180 / Math.PI : (state.angleMode === 'GRAD' ? v * 200 / Math.PI : v);
+      
+      switch (token.value) {
+        case 'sin': result = new Decimal(Math.sin(toRad(argN))); break;
+        case 'cos': result = new Decimal(Math.cos(toRad(argN))); break;
+        case 'tan': {
+          const cv = Math.cos(toRad(argN));
+          if (Math.abs(cv) < 1e-10) throw new Error('tan tidak terdefinisi (90°/270°)');
+          result = new Decimal(Math.tan(toRad(argN))); break;
+        }
+        case 'sin⁻¹': if (argN < -1 || argN > 1) throw new Error('Domain asin: [-1, 1]'); result = new Decimal(fromRad(Math.asin(argN))); break;
+        case 'cos⁻¹': if (argN < -1 || argN > 1) throw new Error('Domain acos: [-1, 1]'); result = new Decimal(fromRad(Math.acos(argN))); break;
+        case 'tan⁻¹': result = new Decimal(fromRad(Math.atan(argN))); break;
+        case 'log': if (argN <= 0) throw new Error('log domain: x > 0'); result = new Decimal(Math.log10(argN)); break;
+        case 'ln': if (argN <= 0) throw new Error('ln domain: x > 0'); result = new Decimal(Math.log(argN)); break;
+        case 'pow10': result = new Decimal(10).pow(arg); break;
+        case 'exp': result = new Decimal(Math.exp(argN)); break;
+        case 'sqrt': if (argN < 0) throw new Error('sqrt domain: x ≥ 0'); result = arg.sqrt(); break;
+        case 'cbrt': result = new Decimal(Math.cbrt(argN)); break;
+        case 'abs': result = arg.abs(); break;
+        case 'floor': result = arg.floor(); break;
+        case 'ceil': result = arg.ceil(); break;
+        case 'round': result = arg.round(); break;
+        default: throw new Error('Fungsi unknown: ' + token.value);
+      }
+      stack.push(result);
+    }
   }
+  if (stack.length !== 1) throw new Error('Ekspresi tidak valid');
+  return stack[0];
+}
 
 function validateExpression(expr) {
   let t = (expr || '').replace(/\s+/g, '');
-  if (t === '') throw new Error('Ekspresi kosong');
-  t = t.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-');
+  if (!t) throw new Error('Ekspresi kosong');
+  let t2 = t.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-').replace(/\(\)/g, '');
+  if (/[+\-*\/^]{2,}/.test(t2)) throw new Error('Operator berurutan tidak valid');
+  if (/[+\-*\/^]$/.test(t2)) throw new Error('Ekspresi tidak lengkap (operator di akhir)');
+  if (/^[*/^]/.test(t2)) throw new Error('Ekspresi tidak valid di awal');
   let depth = 0;
-  for (const c of t) {
-    if (c === '(') depth++;
-    else if (c === ')') {
-      depth--;
-      if (depth < 0) throw new Error('Kurung tutup berlebihan');
-    }
-  }
+  for (const c of t) { if (c === '(') depth++; else if (c === ')') { depth--; if (depth < 0) throw new Error('Kurung tutup berlebihan'); } }
   if (depth > 0) throw new Error(`Kurang ${depth} kurung tutup ')'`);
-  const cleaned = t.replace(/\(-\)/g, 'X');
-  if (/[+\-*\/^]{2,}/.test(cleaned))
-    throw new Error('Operator berurutan tidak valid (contoh: // atau **)');
-  if (/[+\-*\/^]$/.test(cleaned))
-    throw new Error('Ekspresi tidak lengkap (operator di akhir)');
-  if (/^[*/]/.test(cleaned) || /^\^/.test(cleaned))
-    throw new Error('Ekspresi tidak valid di awal');
-  if (/(sin|cos|tan|sin⁻¹|cos⁻¹|tan⁻¹|log|ln|sqrt|cbrt|exp|pow10|abs|floor|ceil|round)\(\s*\)/.test(t))
-    throw new Error('Fungsi membutuhkan argumen di dalam kurung');
-}
-
-/** Larang bentuk seperti sin30 — wajib sin(30) agar tidak ambigu */
-function validateTokenSequence(tokens) {
-  for (let k = 0; k < tokens.length - 1; k++) {
-    if (tokens[k].type === 'FUNCTION' && tokens[k + 1].type === 'NUMBER') {
-      throw new Error('Gunakan kurung setelah nama fungsi, contoh: sin(30)');
-    }
-  }
 }
 
 function calculate(expr) {
   try {
     validateExpression(expr);
     const tokens = tokenize(expr);
-    validateTokenSequence(tokens);
-    const postfix = parse(tokens);
+    // Validasi: FUNCTION tidak boleh langsung diikuti NUMBER (harus pakai kurung)
+    for (let k = 0; k < tokens.length - 1; k++) {
+      if (tokens[k].type === 'FUNCTION' && tokens[k + 1].type === 'NUMBER') throw new Error('Gunakan kurung setelah fungsi, contoh: sin(30)');
+    }
+    const postfix = parse(tokenize(expr));
     return evaluate(postfix);
-  } catch (error) {
-    throw new Error(error.message);
-  }
+  } catch (e) { throw new Error(e.message); }
 }
+  // ==================== DISPLAY EDITING HELPERS ====================
+  function getCaretPosition(element) {
+    const selection = window.getSelection();
+    if (selection.rangeCount === 0) return element.textContent.length;
+    const range = selection.getRangeAt(0);
+    const preCaretRange = range.cloneRange();
+    preCaretRange.selectNodeContents(element);
+    preCaretRange.setEnd(range.endContainer, range.endOffset);
+    return preCaretRange.toString().length;
+  }
 
+  function setCaretPosition(element, pos) {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    let charIndex = 0;
+    const nodeStack = [element];
+    let node, foundStart = false, stop = false;
+
+    while (!stop && (node = nodeStack.pop())) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const nextCharIndex = charIndex + node.length;
+        if (!foundStart && pos <= nextCharIndex) {
+          range.setStart(node, Math.max(0, pos - charIndex));
+          foundStart = true;
+        }
+        if (foundStart && pos <= nextCharIndex) {
+          range.setEnd(node, Math.max(0, pos - charIndex));
+          stop = true;
+        }
+        charIndex = nextCharIndex;
+      } else {
+        const children = Array.from(node.childNodes).reverse();
+        children.forEach(n => nodeStack.push(n));
+      }
+    }
+
+    if (!foundStart) {
+      range.selectNodeContents(element);
+      range.collapse(false);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function syncBufferFromDisplay() {
+    // Ambil textContent, normalisasi entities
+    let text = displayDiv.textContent || '';
+    // Normalize special chars back to internal representation
+    text = text.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-');
+    text = text.replace(/√\(/g, 'sqrt(').replace(/π/g, 'pi').replace(/Ans/g, 'Ans');
+    // Update buffer & cursor
+    state.inputBuffer = text;
+    state.cursorPos = getCaretPosition(displayDiv);
+  }
+
+  function renderDisplay() {
+    // Render buffer ke display dengan pretty chars
+    let html = state.inputBuffer
+      .replace(/\*/g, '×')
+      .replace(/\//g, '÷')
+      .replace(/-/g, '−')
+      .replace(/sqrt\(/g, '√(')
+      .replace(/pi/g, 'π')
+      .replace(/Ans/g, '<span class="ans-token">Ans</span>');
+
+    displayDiv.innerHTML = html || '<span data-placeholder="true">0</span>';
+
+    // Restore cursor
+    if (document.activeElement === displayDiv) {
+      setCaretPosition(displayDiv, Math.min(state.cursorPos, displayDiv.textContent.length));
+    }
+  }
+
+  function insertTextAtCursor(text) {
+    const before = state.inputBuffer.substring(0, state.cursorPos);
+    const after = state.inputBuffer.substring(state.cursorPos);
+    state.inputBuffer = before + text + after;
+    state.cursorPos += text.length;
+    renderDisplay();
+    displayDiv.focus();
+  }
+/** ==================== STATE & UI ==================== */
 const state = {
-  inputBuffer: '',
-  cursorPos: 0,
-  shift: false,
-  alpha: false,
-  angleMode: 'DEG',
-  displayMode: 'NORM',
-  fixDigits: 2,
+  inputBuffer: '', cursorPos: 0, shift: false, alpha: false,
+  angleMode: 'DEG', displayMode: 'NORM', fixDigits: 2,
   memory: new Decimal(0),
   lastAnswer: new Decimal(localStorage.getItem('calcLastAnswer') || '0'),
-  variables: {},
-  history: [],
-  historyIndex: -1,
-  dmsInputMode: false,
-  dmsLevel: 0,
-  justCalculated: false,
-  lastResultWasDMS: false,
-  lastDMSString: '',
-  fracStep: 0,
-  fractionOutputMode: 'mixed'
+  variables: {}, history: [], historyIndex: -1,
+  dmsInputMode: false, dmsLevel: 0, justCalculated: false,
+  lastResultWasDMS: false, lastDMSString: '', fracStep: 0, fractionOutputMode: 'mixed'
 };
 
 const displayDiv = document.getElementById('display');
 const resultDiv = document.getElementById('result');
 
-function updateDisplay() {
-  displayDiv.textContent = formatInputDisplay(state.inputBuffer || '');
-  
-  setTimeout(() => {
-    displayDiv.scrollLeft = displayDiv.scrollWidth;
-  }, 0);
-  
-  document.getElementById('ind-shift').classList.toggle('active', state.shift);
-  document.getElementById('ind-alpha').classList.toggle('active', state.alpha);
-  document.getElementById('ind-dms').classList.toggle('active', state.dmsInputMode);
-  document.getElementById('ind-fix').classList.toggle('active', state.displayMode === 'FIX');
-  document.getElementById('ind-sci').classList.toggle('active', state.displayMode === 'SCI');
-  document.getElementById('angle-mode').textContent = state.angleMode;
-  document.getElementById('memory-display').textContent = `M:${state.memory}`;
-  
-  document.getElementById('btnShift').classList.toggle('shift-active', state.shift);
-  document.getElementById('btnAlpha').classList.toggle('alpha-active', state.alpha);
-}
+  function updateDisplay() {
+    // Gunakan renderDisplay untuk contenteditable
+    renderDisplay();
 
-function formatInputDisplay(expr) {
-  return expr
-    .replace(/sqrt\(/g, '√(')
-    .replace(/\*/g, 'x');
-}
-
-  function formatEngineering(val) {
-    const num = (val instanceof Decimal) ? val.toNumber() : Number(val);
-    if (!isFinite(num) || isNaN(num)) return 'Error';
-    if (num === 0) return '0';
-    const neg = num < 0;
-    const abs = Math.abs(num);
-    const exp3 = Math.floor(Math.log10(abs) / 3) * 3;
-    const mantissa = abs / Math.pow(10, exp3);
-    const m = parseFloat(mantissa.toPrecision(10));
-    return `${neg ? '-' : ''}${m}×10^${exp3}`;
+    ['ind-shift', 'ind-alpha', 'ind-dms', 'ind-fix', 'ind-sci'].forEach(id => {
+      document.getElementById(id).classList.toggle('active',
+        id === 'ind-shift' ? state.shift :
+          id === 'ind-alpha' ? state.alpha :
+            id === 'ind-dms' ? state.dmsInputMode :
+              id === 'ind-fix' ? state.displayMode === 'FIX' : state.displayMode === 'SCI'
+      );
+    });
+    document.getElementById('angle-mode').textContent = state.angleMode;
+    document.getElementById('memory-display').textContent = `M:${state.memory}`;
+    document.getElementById('btnShift').classList.toggle('shift-active', state.shift);
+    document.getElementById('btnAlpha').classList.toggle('alpha-active', state.alpha);
   }
+function formatEngineering(val) {
+  const num = (val instanceof Decimal) ? val.toNumber() : Number(val);
+  if (!isFinite(num) || isNaN(num)) return 'Error';
+  if (num === 0) return '0';
+  const neg = num < 0, abs = Math.abs(num), exp3 = Math.floor(Math.log10(abs) / 3) * 3;
+  return `${num < 0 ? '-' : ''}${(abs / Math.pow(10, Math.floor(Math.log10(abs) / 3) * 3)).toPrecision(10)}×10^${Math.floor(Math.log10(Math.abs(num)) / 3) * 3}`;
+}
 
 function formatResult(val) {
-  let d;
-  try { d = (val instanceof Decimal) ? val : new Decimal(String(val)); }
-  catch(e) { return 'Error'; }
+  let d; try { d = (val instanceof Decimal) ? val : new Decimal(String(val)); } catch(e) { return 'Error'; }
   if (!d.isFinite()) return d.isNaN() ? 'Math Error' : (d.isNeg() ? '-∞' : '∞');
   if (state.displayMode === 'FIX') return d.toFixed(state.fixDigits);
   if (state.displayMode === 'SCI') return d.toExponential(state.fixDigits);
-  // NORM: cap display at 15 significant digits
   const absD = d.abs();
   if (!d.isZero() && absD.lt('1e-9')) return d.toExponential(6);
   if (absD.gt('1e15')) return d.toExponential(6);
   return d.toSignificantDigits(15).toString();
 }
 
-function showError(msg) {
-  resultDiv.innerHTML = `<span class="error">${msg}</span>`;
-}
+function showError(msg) { resultDiv.innerHTML = `<span class="error">${msg}</span>`; }
 
 function toFraction(value, maxDen = 100000, eps = 1e-10) {
   const num = (value instanceof Decimal) ? value.toNumber() : Number(value);
   if (!isFinite(num) || isNaN(num)) return null;
   if (num === 0) return { sign: 1, num: 0, den: 1 };
-
   const sign = num < 0 ? -1 : 1;
   let x = Math.abs(num);
-
   let a = Math.floor(x);
   let h1 = 1, k1 = 0;
   let h = a, k = 1;
-
-  while (Math.abs(x - h / k) > eps && k < maxDen) {
-    x = 1 / (x - a);
-    if (!isFinite(x)) break;
-    a = Math.floor(x);
-    const h2 = h1; h1 = h;
-    const k2 = k1; k1 = k;
+  let rem = x;
+  while (Math.abs(rem - h/k) > 1e-10 && k < 100000) {
+    if (rem === a) break;
+    rem = 1 / (rem - a);
+    if (!isFinite(rem)) break;
+    a = Math.floor(rem);
+    const h2 = h1, k2 = k1;
+    h1 = h; k1 = k;
     h = h2 + a * h1;
     k = k2 + a * k1;
   }
-
   return { sign, num: h, den: k };
 }
 
 function formatFraction(value, mode = 'mixed') {
   const frac = toFraction(value);
   if (!frac) return null;
-
   const signPrefix = frac.sign < 0 ? '-' : '';
-  const absNum = frac.num;
-  const den = frac.den;
-
-  if (mode === 'improper') {
-    return `${signPrefix}${absNum}/${den}`;
-  }
-
+  const absNum = frac.num, den = frac.den;
+  if (mode === 'improper') return `${signPrefix}${absNum}/${den}`;
   const whole = Math.floor(absNum / den);
   const rem = absNum % den;
   if (rem === 0) return `${signPrefix}${whole}`;
@@ -1509,229 +1428,145 @@ function formatFraction(value, mode = 'mixed') {
 }
 
 function openSetupMenu() {
-  const current = `Mode:${state.displayMode} | Digit:${state.fixDigits} | Sudut:${state.angleMode}`;
-  const choice = prompt(
-    `SETUP\n${current}\n\nPilih:\n1 = FIX digits\n2 = SCI digits\n3 = Mode sudut\n4 = NORM`,
-    '1'
-  );
+  const choice = prompt(`SETUP\nMode:${state.displayMode} | Digit:${state.fixDigits} | Sudut:${state.angleMode}\n\n1 = FIX digits\n2 = SCI digits\n3 = Mode sudut\n4 = NORM`, '1');
   if (!choice) return;
-
   const opt = choice.trim();
-  if (opt === '1') {
-    const d = prompt('Masukkan digit FIX (0-12):', String(state.fixDigits));
-    if (d === null) return;
-    const n = parseInt(d, 10);
-    if (!Number.isInteger(n) || n < 0 || n > 12) {
-      showError('Digit FIX harus 0-12');
-      return;
-    }
-    state.fixDigits = n;
-    state.displayMode = 'FIX';
-    resultDiv.textContent = `SETUP: FIX ${n}`;
-  } else if (opt === '2') {
-    const d = prompt('Masukkan digit SCI (0-12):', String(state.fixDigits));
-    if (d === null) return;
-    const n = parseInt(d, 10);
-    if (!Number.isInteger(n) || n < 0 || n > 12) {
-      showError('Digit SCI harus 0-12');
-      return;
-    }
-    state.fixDigits = n;
-    state.displayMode = 'SCI';
-    resultDiv.textContent = `SETUP: SCI ${n}`;
-  } else if (opt === '3') {
-    const a = prompt('Mode sudut: DEG / RAD / GRAD', state.angleMode);
-    if (a === null) return;
-    const normalized = a.trim().toUpperCase();
-    if (!['DEG', 'RAD', 'GRAD'].includes(normalized)) {
-      showError('Mode sudut tidak valid');
-      return;
-    }
-    state.angleMode = normalized;
-    resultDiv.textContent = `SETUP: ${normalized}`;
-  } else if (opt === '4') {
-    state.displayMode = 'NORM';
-    resultDiv.textContent = 'SETUP: NORM';
-  } else {
-    showError('Pilihan SETUP tidak valid');
-  }
+  if (opt === '1') { const d = prompt('Digit FIX (0-12):', state.fixDigits); if (d===null) return; const n=parseInt(d); if(isNaN(n)||n<0||n>12) return showError('Digit 0-12'); state.fixDigits=n; state.displayMode='FIX'; resultDiv.textContent=`SETUP: FIX ${n}`; }
+  else if (opt === '2') { const d = prompt('Digit SCI (0-12):', state.fixDigits); if (d===null) return; const n=parseInt(d); if(isNaN(n)||n<0||n>12) return showError('Digit 0-12'); state.fixDigits=n; state.displayMode='SCI'; resultDiv.textContent=`SETUP: SCI ${n}`; }
+  else if (opt === '3') { const a = prompt('Mode sudut: DEG / RAD / GRAD', state.angleMode); if(!a)return; const n=a.trim().toUpperCase(); if(!['DEG','RAD','GRAD'].includes(n)) return showError('Mode salah'); state.angleMode=n; resultDiv.textContent=`SETUP: ${n}`; }
+  else if (opt === '4') { state.displayMode='NORM'; resultDiv.textContent='SETUP: NORM'; }
+  else showError('Pilihan salah');
 }
 
 function handleVarButton() {
-  const allowed = ['A', 'B', 'C', 'D', 'F', 'x', 'y', 'M'];
-  const varsPreview = allowed.map((v) => `${v}:${state.variables[v] ?? '-'}`).join(' | ');
-
+  const allowed = ['A','B','C','D','F','x','y','M'];
+  const preview = allowed.map(v => `${v}:${state.variables[v] ?? '-'}`).join(' | ');
   if (state.shift) {
-    const target = prompt(`Simpan ke variabel (A,B,C,D,F,x,y,M)\n${varsPreview}`, 'A');
-    if (target === null) return;
+    const target = prompt(`Simpan ke variabel (A,B,C,D,F,x,y,M)\n${allowed.join(', ')}`, 'A');
+    if (!target) return;
     const key = target.trim();
-    if (!allowed.includes(key)) {
-      showError('Nama variabel tidak valid');
-      return;
-    }
-    let val = state.lastAnswer;
-    if (state.inputBuffer.trim()) {
-      val = calculate(state.inputBuffer);
-    }
+    if (!['A','B','C','D','F','x','y','M'].includes(key)) return showError('Nama variabel salah');
+    const val = state.inputBuffer ? calculate(state.inputBuffer) : state.lastAnswer;
     state.variables[key] = val;
     resultDiv.textContent = `${key} = ${formatResult(val)} ✔`;
   } else {
-    const target = prompt(`Panggil variabel (A,B,C,D,F,x,y,M)\n${varsPreview}`, 'A');
-    if (target === null) return;
+    const target = prompt(`Panggil variabel (A,B,C,D,F,x,y,M)`, 'A');
+    if (!target) return;
     const key = target.trim();
-    if (!allowed.includes(key)) {
-      showError('Nama variabel tidak valid');
-      return;
-    }
-    if (state.variables[key] === undefined) {
-      showError(`Variabel ${key} belum ada`);
-      return;
-    }
+    if (!['A','B','C','D','F','x','y','M'].includes(key)) return showError('Nama variabel salah');
+    if (state.variables[key] === undefined) return showError(`Variabel ${key} belum ada`);
     insertText(key);
     resultDiv.textContent = `RCL ${key}`;
   }
-
-  state.shift = false;
+  state.shift = false; updateDisplay();
 }
 
-function addToHistory(expr, result) {
-  state.history.push({ expr, result });
-  state.historyIndex = state.history.length;
-}
+function addToHistory(expr, result) { state.history.push({ expr, result }); state.historyIndex = state.history.length; }
 
-function insertText(text) {
-  if (state.justCalculated) {
-    if (/^[0-9.]$/.test(text)) {
-      state.inputBuffer = '';
-      state.cursorPos = 0;
-      state.justCalculated = false;
-      state.lastResultWasDMS = false;
-      state.lastDMSString = '';
-    } else if (/^[\+\-\*\/\^]$/.test(text)) {
-      if (state.lastResultWasDMS && state.lastDMSString) {
-        state.inputBuffer = state.lastDMSString;
-      } else {
-        state.inputBuffer = state.lastAnswer.toString();
+  function insertText(text) {
+    // Handle justCalculated logic
+    if (state.justCalculated) {
+      if (/^[0-9.]$/.test(text)) {
+        state.inputBuffer = '';
+        state.cursorPos = 0;
+        state.justCalculated = false;
+        state.lastResultWasDMS = false;
+        state.lastDMSString = '';
       }
-      state.cursorPos = state.inputBuffer.length;
-      state.justCalculated = false;
-    } else if (text === 'Ans') {
-      state.inputBuffer = 'Ans';
-      state.cursorPos = 3;
-      state.justCalculated = false;
-      updateDisplay();
-      return;
+      else if (/^[\+\-\*\/\^]$/.test(text)) {
+        state.inputBuffer = state.lastResultWasDMS && state.lastDMSString ? state.lastDMSString : state.lastAnswer.toString();
+        state.cursorPos = state.inputBuffer.length;
+        state.justCalculated = false;
+      }
+      else if (text === 'Ans') {
+        state.inputBuffer = 'Ans';
+        state.cursorPos = 3;
+        state.justCalculated = false;
+        updateDisplay();
+        return;
+      }
+      else {
+        state.justCalculated = false;
+      }
     }
-  }
-  const before = state.inputBuffer.substring(0, state.cursorPos);
-  const after = state.inputBuffer.substring(state.cursorPos);
-  state.inputBuffer = before + text + after;
-  state.cursorPos += text.length;
-  updateDisplay();
-}
 
-function deleteChar() {
-  if (state.cursorPos > 0) {
-    const before = state.inputBuffer.substring(0, state.cursorPos - 1);
+    // ==================== DMS LEVEL RESET LOGIC ====================
+    // Reset DMS level saat memulai operand baru
+    const triggerReset = /^[\+\-\*\/\^]$/.test(text) ||
+      ['sin', 'cos', 'tan', 'sin⁻¹', 'cos⁻¹', 'tan⁻¹', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
+        'log', 'ln', 'sqrt', 'cbrt', 'exp', 'pow10', 'abs', 'floor', 'ceil', 'round'].includes(text) ||
+      text === '(';
+
+    if (triggerReset && state.dmsInputMode) {
+      state.dmsInputMode = false;
+      state.dmsLevel = 1;
+    }
+
+    // Insert text at cursor
+    const before = state.inputBuffer.substring(0, state.cursorPos);
     const after = state.inputBuffer.substring(state.cursorPos);
-    state.inputBuffer = before + after;
-    state.cursorPos--;
-    updateDisplay();
-  }
-}
+    state.inputBuffer = before + text + after;
+    state.cursorPos += text.length;
 
-function clearAll() {
-  state.inputBuffer = '';
-  state.cursorPos = 0;
-  state.dmsInputMode = false;
-  state.dmsLevel = 0;
-  state.shift = false;
-  state.alpha = false;
-  resultDiv.textContent = '0';
-  updateDisplay();
-}
-
-function clearEntry() {
-  state.inputBuffer = '';
-  state.cursorPos = 0;
-  state.dmsInputMode = false;
-  state.dmsLevel = 0;
-  updateDisplay();
-}
-
-document.querySelectorAll('button[data-num]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const num = btn.getAttribute('data-num');
-    if (state.shift) {
-      const vars = ['A', 'B', 'C', 'D', 'F', 'x', 'y', 'M', 'M', 'M'];
-      insertText(vars[parseInt(num)] || num);
-      state.shift = false;
-    } else if (state.alpha) {
-      const vars = ['A', 'B', 'C', 'D', 'F', 'x', 'y', 'M', 'M', 'M'];
-      insertText(vars[parseInt(num)] || num);
-      state.alpha = false;
-    } else {
-      insertText(num);
+    // Reset DMS level setelah operand baru dimulai
+    if (/^[\+\-\*\/\^]$/.test(text) || text === '(') {
+      state.dmsLevel = 1;
     }
-    updateDisplay();
-  });
-});
 
-document.getElementById('btnShift').addEventListener('click', () => {
-  state.shift = !state.shift;
-  state.alpha = false;
-  updateDisplay();
-});
-
-  document.getElementById('btnSto').addEventListener('click', () => {
-    if (state.shift) {
-      // RCL — recall memory ke ekspresi
-      insertText(state.memory.toString());
-    } else {
-      // STO — simpan hasil ke memory
-      try {
-        const val = state.inputBuffer
-          ? calculate(state.inputBuffer)
-          : state.lastAnswer;
-        state.memory = val;
-        resultDiv.textContent = `M: ${formatResult(val)}  ✔ Tersimpan`;
-      } catch (e) {
-        state.memory = state.lastAnswer;
-        resultDiv.textContent = `M: ${formatResult(state.lastAnswer)}  ✔ Tersimpan`;
-      }
-    }
-    state.shift = false;
-    updateDisplay();
-  });
-  
-document.getElementById('btnAlpha').addEventListener('click', () => {
-  state.alpha = !state.alpha;
-  state.shift = false;
-  updateDisplay();
-});
-
-document.getElementById('btnVar').addEventListener('click', () => {
-  try {
-    handleVarButton();
-  } catch (e) {
-    showError(e.message);
+    renderDisplay();
+    displayDiv.focus();
   }
+
+function deleteChar() { if (state.cursorPos > 0) { state.inputBuffer = state.inputBuffer.slice(0, state.cursorPos - 1) + state.inputBuffer.slice(state.cursorPos); state.cursorPos--; updateDisplay(); } }
+
+function clearAll() { state.inputBuffer = ''; state.cursorPos = 0; state.dmsInputMode = false; state.dmsLevel = 0; state.shift = false; state.alpha = false; resultDiv.textContent = '0'; updateDisplay(); }
+function clearEntry() { state.inputBuffer = ''; state.cursorPos = 0; state.dmsInputMode = false; state.dmsLevel = 0; updateDisplay(); }
+
+// Button Event Listeners
+document.querySelectorAll('button[data-num]').forEach(btn => btn.addEventListener('click', () => {
+  const num = btn.dataset.num;
+  if (state.shift) { const vars = ['A','B','C','D','F','x','y','M','M','M']; insertText(vars[parseInt(num)] || num); state.shift = false; }
+  else if (state.alpha) { const vars = ['A','B','C','D','F','x','y','M','M','M']; insertText(vars[parseInt(num)] || num); state.alpha = false; }
+  else insertText(num);
   updateDisplay();
-});
+}));
 
-document.getElementById('btnClear').addEventListener('click', () => {
-  if (state.shift) clearEntry();
-  else clearAll();
+document.getElementById('btnShift').addEventListener('click', () => { state.shift = !state.shift; state.alpha = false; updateDisplay(); });
+document.getElementById('btnSto').addEventListener('click', () => {
+  if (state.shift) { insertText(state.memory.toString()); }
+  else { try { const val = state.inputBuffer ? calculate(state.inputBuffer) : state.lastAnswer; state.memory = val; resultDiv.textContent = `M: ${formatResult(val)}  ✔`; } catch(e) { state.memory = state.lastAnswer; resultDiv.textContent = `M: ${formatResult(state.lastAnswer)}  ✔`; } }
+  state.shift = false; updateDisplay();
 });
-
+document.getElementById('btnAlpha').addEventListener('click', () => { state.alpha = !state.alpha; state.shift = false; updateDisplay(); });
+document.getElementById('btnVar').addEventListener('click', () => { try { handleVarButton(); } catch(e) { showError(e.message); } updateDisplay(); });
+document.getElementById('btnClear').addEventListener('click', () => state.shift ? clearEntry() : clearAll());
 document.getElementById('btnDelete').addEventListener('click', deleteChar);
+  document.getElementById('btnPlus').addEventListener('click', () => {
+    insertText('+');
+    state.dmsLevel = 1; 
+  });
+  document.getElementById('btnMinus').addEventListener('click', () => {
+    insertText('-');
+    state.dmsLevel = 1;
+  });
+  document.getElementById('btnMul').addEventListener('click', () => {
+    insertText('*');
+    state.dmsLevel = 1;
+  });
 
-document.getElementById('btnPlus').addEventListener('click', () => insertText('+'));
-document.getElementById('btnMinus').addEventListener('click', () => insertText('-'));
-document.getElementById('btnMul').addEventListener('click', () => insertText('*'));
-document.getElementById('btnDiv').addEventListener('click', () => insertText('/'));
-document.getElementById('btnPower').addEventListener('click', () => insertText('^'));
-document.getElementById('btnOpen').addEventListener('click', () => insertText('('));
+  document.getElementById('btnDiv').addEventListener('click', () => {
+    insertText('/');
+    state.dmsLevel = 1;
+  });
+
+  document.getElementById('btnPower').addEventListener('click', () => {
+    insertText('^');
+    state.dmsLevel = 1;
+  });
+  document.getElementById('btnOpen').addEventListener('click', () => {
+    insertText('(');
+    state.dmsLevel = 1; // TAMBAHKAN INI
+  });
 document.getElementById('btnClose').addEventListener('click', () => insertText(')'));
 document.getElementById('btnDot').addEventListener('click', () => insertText('.'));
 
@@ -1745,41 +1580,42 @@ document.getElementById('btnPi').addEventListener('click', () => {
   updateDisplay();
 });
 
-document.getElementById('btnSin').addEventListener('click', () => {
-  insertText(state.shift ? 'sin⁻¹' : 'sin');
-  state.shift = false;
-  updateDisplay();
-});
+  document.getElementById('btnSin').addEventListener('click', () => {
+    insertText(state.shift ? 'sin⁻¹' : 'sin');
+    state.dmsLevel = 1; // TAMBAHKAN INI
+    state.shift = false; updateDisplay();
+  });
 
-document.getElementById('btnCos').addEventListener('click', () => {
-  insertText(state.shift ? 'cos⁻¹' : 'cos');
-  state.shift = false;
-  updateDisplay();
-});
+  document.getElementById('btnCos').addEventListener('click', () => {
+    insertText(state.shift ? 'cos⁻¹' : 'cos');
+    state.dmsLevel = 1;
+    state.shift = false; updateDisplay();
+  });
 
-document.getElementById('btnTan').addEventListener('click', () => {
-  insertText(state.shift ? 'tan⁻¹' : 'tan');
-  state.shift = false;
-  updateDisplay();
-});
+  document.getElementById('btnTan').addEventListener('click', () => {
+    insertText(state.shift ? 'tan⁻¹' : 'tan');
+    state.dmsLevel = 1;
+    state.shift = false; updateDisplay();
+  });
 
   document.getElementById('btnLog').addEventListener('click', () => {
     insertText(state.shift ? 'pow10(' : 'log(');
-    state.shift = false;
-    updateDisplay();
+    state.dmsLevel = 1;
+    state.shift = false; updateDisplay();
   });
 
   document.getElementById('btnLn').addEventListener('click', () => {
-    insertText(state.shift ? 'exp(' : 'ln(');
-    state.shift = false;
-    updateDisplay();
-  });
+      insertText(state.shift ? 'exp(' : 'ln(');
+      state.dmsLevel = 1;
+      state.shift = false; updateDisplay();
+    });
+
 
   document.getElementById('btnSqrt').addEventListener('click', () => {
-    insertText(state.shift ? 'cbrt(' : 'sqrt(');
-    state.shift = false;
-    updateDisplay();
-  });
+      insertText(state.shift ? 'cbrt(' : 'sqrt(');
+      state.dmsLevel = 1;
+      state.shift = false; updateDisplay();
+    });
 
 document.getElementById('btnFact').addEventListener('click', () => {
   if (state.alpha) {
@@ -1844,46 +1680,43 @@ document.getElementById('btnAns').addEventListener('click', () => {
     updateDisplay();
   });
 
-document.getElementById('btnDms').addEventListener('click', () => {
-  if (state.shift) {
-    try {
-      // Jika baru selesai hitung (tekan =), konversi lastAnswer ke DMS
-      // Jika belum, hitung dulu inputBuffer lalu konversi
-      let sourceVal;
-      if (state.justCalculated) {
-        sourceVal = state.lastAnswer;
-      } else {
-        const expr = state.inputBuffer || '';
-        sourceVal = expr ? calculate(expr) : state.lastAnswer;
+  document.getElementById('btnDms').addEventListener('click', () => {
+    if (state.shift) {
+      try {
+        let sourceVal;
+        if (state.justCalculated) { sourceVal = state.lastAnswer; }
+        else { const expr = state.inputBuffer || ''; sourceVal = expr ? calculate(expr) : state.lastAnswer; }
+        const dms = DMSValue.fromDecimal(sourceVal);
+        const dmsString = dms.toResultString();
+        resultDiv.textContent = dmsString;
+        state.lastAnswer = sourceVal;
+        localStorage.setItem('calcLastAnswer', sourceVal.toString());
+        state.justCalculated = true;
+        state.lastResultWasDMS = true;
+        state.lastDMSString = dmsString;
+      } catch (e) { showError(e.message); }
+      state.shift = false;
+    } else {
+      // Reset DMS level jika memulai operand baru (setelah operator/fungsi)
+      const lastChar = state.inputBuffer.slice(-1);
+      const afterOperator = /[\+\-\*\/\^]$/.test(state.inputBuffer) || state.inputBuffer.endsWith('(');
+
+      if (!state.dmsInputMode || state.dmsLevel === 3) {
+        // Mulai DMS baru
+        insertText('°');
+        state.dmsInputMode = true;
+        state.dmsLevel = 1;
+      } else if (state.dmsLevel === 1) {
+        insertText("'");
+        state.dmsLevel = 2;
+      } else if (state.dmsLevel === 2) {
+        insertText('"');
+        state.dmsLevel = 3;
+        state.dmsInputMode = false;
       }
-      const dms = DMSValue.fromDecimal(sourceVal);
-      const dmsString = dms.toResultString();
-      resultDiv.textContent = dmsString;
-      state.lastAnswer = sourceVal;
-      localStorage.setItem('calcLastAnswer', sourceVal.toString());
-      state.justCalculated = true;
-      state.lastResultWasDMS = true;
-      state.lastDMSString = dmsString;
-    } catch (e) {
-      showError(e.message);
     }
-    state.shift = false;
-  } else {
-    if (!state.dmsInputMode) {
-      insertText('°');
-      state.dmsInputMode = true;
-      state.dmsLevel = 1;
-    } else if (state.dmsLevel === 1) {
-      insertText("'");
-      state.dmsLevel = 2;
-    } else if (state.dmsLevel === 2) {
-      insertText('"');
-      state.dmsLevel = 3;
-      state.dmsInputMode = false;
-    }
-  }
-  updateDisplay();
-});
+    updateDisplay();
+  });
 
   document.getElementById('btnEng').addEventListener('click', () => {
     if (state.shift) {
@@ -1916,37 +1749,53 @@ document.getElementById('btnMode').addEventListener('click', () => {
   updateDisplay();
 });
 
-document.getElementById('btnEquals').addEventListener('click', () => {
-  if (!state.inputBuffer) return;
-  
-  try {
-    const result = calculate(state.inputBuffer);
-    
-    // Auto-DMS output hanya jika ekspresi adalah aritmetika DMS murni
-    // (mengandung °/'/") DAN tidak mengandung fungsi trig/invers
-    const hasDMS = state.inputBuffer.includes('°') || state.inputBuffer.includes("'") || state.inputBuffer.includes('"');
-    const hasTrigFunc = /sin|cos|tan|log|ln|sqrt|cbrt|exp|pow10|abs/.test(state.inputBuffer);
-    
-    if (hasDMS && !hasTrigFunc) {
-      const dms = DMSValue.fromDecimal(result);
-      const dmsString = dms.toResultString();
-      resultDiv.textContent = dmsString;
-      state.lastResultWasDMS = true;
-      state.lastDMSString = dmsString;
-    } else {
-      resultDiv.textContent = formatResult(result);
-      state.lastResultWasDMS = false;
-      state.lastDMSString = '';
+  document.getElementById('btnEquals').addEventListener('click', () => {
+    if (!state.inputBuffer) return;
+
+    try {
+      const result = calculate(state.inputBuffer);
+      
+      // Auto-DMS output hanya jika ekspresi adalah aritmetika DMS murni
+      // (mengandung °/'/") DAN tidak mengandung fungsi trig/invers
+      const hasDMS = state.inputBuffer.includes('°') || state.inputBuffer.includes("'") || state.inputBuffer.includes('"');
+      
+      // Regex lebih robust untuk deteksi fungsi trigonometri (termasuk invers)
+      const hasTrigFunc = /sin⁻¹|cos⁻¹|tan⁻¹|asin|acos|atan|sinh|cosh|tanh|sin\(|cos\(|tan\(|log\(|ln\(|sqrt\(|cbrt\(|exp\(|pow10\(|abs\(/.test(state.inputBuffer);
+      
+      if (hasDMS && !hasTrigFunc) {
+        const dms = DMSValue.fromDecimal(result);
+        const dmsString = dms.toResultString();
+        resultDiv.textContent = dmsString;
+        state.lastResultWasDMS = true;
+        state.lastDMSString = dmsString;
+      } else {
+        // Auto-DMS output hanya jika ekspresi mengandung DMS DAN tidak mengandung fungsi trig/invers
+        const hasDMS = state.inputBuffer.includes('°') || state.inputBuffer.includes("'") || state.inputBuffer.includes('"');
+        const hasTrigFunc = /sin⁻¹|cos⁻¹|tan⁻¹|asin|acos|atan|sinh|cosh|tanh|sin\(|cos\(|tan\(|log\(|ln\(|sqrt\(|cbrt\(|exp\(|pow10\(|abs\(/.test(state.inputBuffer);
+
+        if (hasDMS && !hasTrigFunc) {
+          const dms = DMSValue.fromDecimal(result);
+          const dmsString = dms.toResultString();
+          resultDiv.textContent = dmsString;
+          state.lastResultWasDMS = true;
+          state.lastDMSString = dmsString;
+        } else {
+          resultDiv.textContent = formatResult(result);
+          state.lastResultWasDMS = false;
+          state.lastDMSString = '';
+        }
+        state.lastResultWasDMS = false;
+        state.lastDMSString = '';
+      }
+      
+      state.lastAnswer = result;
+      localStorage.setItem('calcLastAnswer', result.toString());
+      state.justCalculated = true;
+      addToHistory(state.inputBuffer, result);
+    } catch (e) {
+      showError(e.message);
     }
-    
-    state.lastAnswer = result;
-    localStorage.setItem('calcLastAnswer', result.toString());
-    state.justCalculated = true;
-    addToHistory(state.inputBuffer, result);
-  } catch (e) {
-    showError(e.message);
-  }
-});
+  });
 
   document.addEventListener('keydown', (e) => {
     if (e.key >= '0' && e.key <= '9') insertText(e.key);
@@ -2002,6 +1851,60 @@ document.addEventListener('keydown', function(e) {
     sidebarOverlay.classList.remove('active');
   }
 });
+  // ==================== DISPLAY EVENT HANDLERS ====================
+  displayDiv.addEventListener('input', (e) => {
+    // Sync buffer dari display saat user mengetik/hapus
+    syncBufferFromDisplay();
+    updateDisplay();
+  });
+
+  displayDiv.addEventListener('click', () => {
+    state.cursorPos = getCaretPosition(displayDiv);
+  });
+
+  displayDiv.addEventListener('keyup', (e) => {
+    state.cursorPos = getCaretPosition(displayDiv);
+  });
+
+  displayDiv.addEventListener('keydown', (e) => {
+    // Handle arrow keys untuk cursor position
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+      setTimeout(() => {
+        state.cursorPos = getCaretPosition(displayDiv);
+      }, 0);
+    }
+
+    // Handle Enter = Calculate
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('btnEquals').click();
+    }
+
+    // Handle Backspace/Delete sync
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      setTimeout(() => syncBufferFromDisplay(), 0);
+    }
+
+    // Paste handling
+    if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
+      setTimeout(() => syncBufferFromDisplay(), 0);
+    }
+  });
+
+  displayDiv.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text');
+    insertTextAtCursor(text.replace(/[^0-9+\-*/^().πeAns√°'"!]/g, ''));
+  });
+
+  displayDiv.addEventListener('focus', () => {
+    renderDisplay();
+  });
+
+  displayDiv.addEventListener('blur', () => {
+    syncBufferFromDisplay();
+    renderDisplay();
+  });
 
 const accordionHeaders = document.querySelectorAll('.accordion-header');
 
@@ -2019,6 +1922,9 @@ accordionHeaders.forEach(header => {
     }
   });
 });
+
+// Init
+updateDisplay();
 </script>
 </body>
 </html>
