@@ -1008,17 +1008,19 @@
             if (expr.substring(i, i + 3) === 'nCr') { tokens.push(new Token('OPERATOR', 'nCr')); i += 3; continue; }
             
             const dmsMatch = expr.substring(i)
-            .match(/^(-?)(\d+(?:\.\d+)?)°(?:(\d+(?:\.\d+)?)['\u2032](?:(\d+(?:\.\d+)?)["\u2033']{0,2})?|(\d+(?:\.\d+)?)(?!['\u2032"0-9]))?/);
-            if (dmsMatch) {
-                const sign = dmsMatch[1] === '-' ? -1 : 1;
-                let signFinal = (dmsMatch[1] === '-') ? -1 : 1;
-                if (tokens.length > 0 && tokens[tokens.length - 1].type === 'UNARY' && tokens[tokens.length - 1].value === '-') { tokens.pop(); signFinal = -1; }
-                else { signFinal = dmsMatch[1] === '-' ? -1 : 1; }
-                const dmsValue = new DMSValue(parseFloat(dmsMatch[2])||0, parseFloat(dmsMatch[3] || dmsMatch[5])||0, parseFloat(dmsMatch[4])||0, signFinal);
-                tokens.push(new Token('DMS', dmsValue, true));
-                i += dmsMatch[0].length;
-                continue;
+            .match(/^(\d+(?:\.\d+)?)°(?:(\d+(?:\.\d+)?)['\u2032](?:(\d+(?:\.\d+)?)["\u2033']{0,2})?|(\d+(?:\.\d+)?)(?!['\u2032"0-9]))?/);
+
+          if (dmsMatch) {
+            let signFinal = 1;
+            if (tokens.length > 0 && tokens[tokens.length - 1].type === 'UNARY' && tokens[tokens.length - 1].value === '-') {
+              tokens.pop();
+              signFinal = -1;
             }
+            const dmsValue = new DMSValue(parseFloat(dmsMatch[1]) || 0, parseFloat(dmsMatch[2] || dmsMatch[4]) || 0, parseFloat(dmsMatch[3]) || 0, signFinal);
+            tokens.push(new Token('DMS', dmsValue, true));
+            i += dmsMatch[0].length;
+            continue;
+          }
             
             if (/\d/.test(char) || (char === '.' && i + 1 < expr.length && /\d/.test(expr[i + 1]))) {
                 let numStr = '';
