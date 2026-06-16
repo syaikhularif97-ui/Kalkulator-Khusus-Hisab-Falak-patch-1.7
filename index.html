@@ -590,9 +590,6 @@
           <div class="example-title">Contoh Konversi:</div>
           <code>45°30'0"</code> → Tekan SHIFT+°'″ → Hasil: <code>45.5</code>
         </div>
-        <div class="note">
-          <strong>Penting:</strong> Pada kalkulator ini, tombol DMS bekerja secara berurutan, yaitu dimulai dari derajat, kemudian menit, dan dilanjutkan detik. Namun dalam kondisi tertentu ketika input hanya terdiri dari dua komponen (misalnya derajat dan menit) lalu langsung diikuti tanda operasi seperti tambah, kurang, kali, atau bagi, maka pada penggunaan DMS berikutnya sistem akan langsung membaca sebagai detik karena urutannya berlanjut. Untuk mengatasinya, pengguna harus menghapus input terlebih dahulu, kemudian menekan kembali agar pembacaan dimulai lagi dari derajat.
-        </div>
       </div>
     </div>
   </div>
@@ -1023,13 +1020,12 @@
         expr = expr.replace(/\s+/g, '');
         expr = expr.replace(/\(\u2212\)/g, '(-)');
         while (i < expr.length) {
-            let char = expr[i];
-            if (expr.substring(i, i + 3) === '(-)') { tokens.push(new Token('UNARY', '-')); i += 3; continue; }
-            if (expr.substring(i, i + 3) === 'nPr') { tokens.push(new Token('OPERATOR', 'nPr')); i += 3; continue; }
-            if (expr.substring(i, i + 3) === 'nCr') { tokens.push(new Token('OPERATOR', 'nCr')); i += 3; continue; }
-            
-            const dmsMatch = expr.substring(i)
-            .match(/^(\d+(?:\.\d+)?)°(?:(\d+(?:\.\d+)?)['\u2032](?:(\d+(?:\.\d+)?)["\u2033']{0,2})?|(\d+(?:\.\d+)?)(?!['\u2032"0-9]))?/);
+          let char = expr[i];
+          if (expr.substring(i, i + 3) === '(-)') { tokens.push(new Token('UNARY', '-')); i += 3; continue; }
+          if (expr.substring(i, i + 3) === 'nPr') { tokens.push(new Token('OPERATOR', 'nPr')); i += 3; continue; }
+          if (expr.substring(i, i + 3) === 'nCr') { tokens.push(new Token('OPERATOR', 'nCr')); i += 3; continue; }
+
+          const dmsMatch = expr.substring(i).match(/^(\d+(?:\.\d+)?)°(?:(\d+(?:\.\d+)?)['\u2032](?:(\d+(?:\.\d+)?)["\u2033']{0,2})?|(\d+(?:\.\d+)?)(?!['\u2032"0-9]))?/);
 
           if (dmsMatch) {
             let signFinal = 1;
@@ -1042,61 +1038,68 @@
             i += dmsMatch[0].length;
             continue;
           }
-            
-            if (/\d/.test(char) || (char === '.' && i + 1 < expr.length && /\d/.test(expr[i + 1]))) {
-                let numStr = '';
-                while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) { numStr += expr[i]; i++; }
-                if (i < expr.length && (expr[i] === 'e' || expr[i] === 'E')) {
-                    const afterE = expr.substring(i + 1);
-                    const sciMatch = afterE.match(/^[+\-]?\d+/);
-                    if (!sciMatch) throw new Error('Notasi ilmiah tidak lengkap (contoh: 1e3, 2.5E-4)');
-                    numStr += expr[i] + sciMatch[0];
-                    i += 1 + sciMatch[0].length;
-                }
-                tokens.push(new Token('NUMBER', numStr));
-                continue;
+
+          if (/\d/.test(char) || (char === '.' && i + 1 < expr.length && /\d/.test(expr[i + 1]))) {
+            let numStr = '';
+            while (i < expr.length && (/\d/.test(expr[i]) || expr[i] === '.')) { numStr += expr[i]; i++; }
+            if (i < expr.length && (expr[i] === 'e' || expr[i] === 'E')) {
+              const afterE = expr.substring(i + 1);
+              const sciMatch = afterE.match(/^[+\-]?\d+/);
+              if (!sciMatch) throw new Error('Notasi ilmiah tidak lengkap (contoh: 1e3, 2.5E-4)');
+              numStr += expr[i] + sciMatch[0];
+              i += 1 + sciMatch[0].length;
             }
-            
-            if (expr.substring(i, i + 1) === 'π') { tokens.push(new Token('NUMBER', '3.1415926535897932384626433832795028841971693993751058209749445923')); i++; continue; }
-            if (expr.substring(i, i + 1) === 'e' && (i + 1 >= expr.length || !/[a-z]/.test(expr[i + 1]))) { tokens.push(new Token('NUMBER', '2.7182818284590452353602874713526624977572470936999595749669676277')); i++; continue; }
-            
-            const funcMatch = expr.substring(i).match(/^(pow10|sin⁻¹|cos⁻¹|tan⁻¹|sin|cos|tan|log|ln|sqrt|cbrt|exp|abs|floor|ceil|round|³√|√)/);
-            if (funcMatch) { tokens.push(new Token('FUNCTION', funcMatch[0])); i += funcMatch[0].length; continue; }
-            
-            if (expr.substring(i, i + 1) === 'π') { tokens.push(new Token('NUMBER', '3.1415926535897932384626433832795028841971693993751058209749445923')); i++; continue; }
-            if (expr.substring(i, i + 1) === 'e' && (i + 1 >= expr.length || !/[a-z]/.test(expr[i + 1]))) { tokens.push(new Token('NUMBER', '2.7182818284590452353602874713526624977572470936999595749669676277')); i++; continue; }
-            
-            const varMatch = expr.substring(i).match(/^(A|B|C|D|F|x|y|M)/);
-            if (varMatch) { const key = varMatch[1]; if (state.variables[key] === undefined) throw new Error(`Variabel ${key} belum ada`); tokens.push(new Token('NUMBER', state.variables[key].toString())); i += varMatch[1].length; continue; }
-            
-            if (char === '(') { tokens.push(new Token('LPAREN', '(')); i++; continue; }
-            if (char === ')') { tokens.push(new Token('RPAREN', ')')); i++; continue; }
-            
-            if (['+', '-', '*', '/', '^', '×', '÷', '−'].includes(char)) {
-                if (char === '×') char = '*'; if (char === '÷') char = '/'; if (char === '−') char = '-';
-                if ((char === '-' || char === '+') && (tokens.length === 0 || tokens[tokens.length - 1].type === 'OPERATOR' || tokens[tokens.length - 1].type === 'LPAREN' || tokens[tokens.length - 1].type === 'FUNCTION')) { tokens.push(new Token('UNARY', char)); }
-                else { tokens.push(new Token('OPERATOR', char)); }
-                i++; continue;
+            tokens.push(new Token('NUMBER', numStr));
+            continue;
+          }
+
+          if (expr.substring(i, i + 1) === 'π') { tokens.push(new Token('NUMBER', '3.1415926535897932384626433832795028841971693993751058209749445923')); i++; continue; }
+          if (expr.substring(i, i + 1) === 'e' && (i + 1 >= expr.length || !/[a-z]/.test(expr[i + 1]))) { tokens.push(new Token('NUMBER', '2.7182818284590452353602874713526624977572470936999595749669676277')); i++; continue; }
+
+          const funcMatch = expr.substring(i).match(/^(pow10|sin⁻¹|cos⁻¹|tan⁻¹|sin|cos|tan|log|ln|sqrt|cbrt|exp|abs|floor|ceil|round|³√|√)/);
+          if (funcMatch) { tokens.push(new Token('FUNCTION', funcMatch[0])); i += funcMatch[0].length; continue; }
+
+          const varMatch = expr.substring(i).match(/^(Ans|A|B|C|D|F|x|y|M)/);
+          if (varMatch) {
+            const key = varMatch[1];
+            if (key === 'Ans') {
+              tokens.push(new Token('NUMBER', state.lastAnswer.toString()));
+            } else {
+              if (state.variables[key] === undefined) throw new Error(`Variabel ${key} belum ada`);
+              tokens.push(new Token('NUMBER', state.variables[key].toString()));
             }
-            if (char === '!') { tokens.push(new Token('FACTORIAL', '!')); i++; continue; }
-            throw new Error(`Karakter tidak dikenal: ${char} di posisi ${i}`);
+            i += varMatch[1].length;
+            continue;
+          }
+
+          if (char === '(') { tokens.push(new Token('LPAREN', '(')); i++; continue; }
+          if (char === ')') { tokens.push(new Token('RPAREN', ')')); i++; continue; }
+
+          if (['+', '-', '*', '/', '^', '×', '÷', '−'].includes(char)) {
+            if (char === '×') char = '*'; if (char === '÷') char = '/'; if (char === '−') char = '-';
+            if ((char === '-' || char === '+') && (tokens.length === 0 || tokens[tokens.length - 1].type === 'OPERATOR' || tokens[tokens.length - 1].type === 'LPAREN' || tokens[tokens.length - 1].type === 'FUNCTION')) { tokens.push(new Token('UNARY', char)); }
+            else { tokens.push(new Token('OPERATOR', char)); }
+            i++; continue;
+          }
+          if (char === '!') { tokens.push(new Token('FACTORIAL', '!')); i++; continue; }
+          throw new Error(`Karakter tidak dikenal: ${char} di posisi ${i}`);
         }
-        
+
         // POST-PROCESSING: Implicit multiplication DILUAR LOOP
         const processed = [];
         for (let j = 0; j < tokens.length; j++) {
-            processed.push(tokens[j]);
-            if (j + 1 < tokens.length) {
-                const curr = tokens[j], next = tokens[j + 1];
-                const endTypes = ['NUMBER', 'DMS', 'RPAREN', 'FACTORIAL'];
-                const startTypes = ['NUMBER', 'DMS', 'LPAREN', 'FUNCTION'];
-                if (endTypes.includes(curr.type) && startTypes.includes(next.type)) {
-                    processed.push(new Token('OPERATOR', '*'));
-                }
+          processed.push(tokens[j]);
+          if (j + 1 < tokens.length) {
+            const curr = tokens[j], next = tokens[j + 1];
+            const endTypes = ['NUMBER', 'DMS', 'RPAREN', 'FACTORIAL'];
+            const startTypes = ['NUMBER', 'DMS', 'LPAREN', 'FUNCTION'];
+            if (endTypes.includes(curr.type) && startTypes.includes(next.type)) {
+              processed.push(new Token('OPERATOR', '*'));
             }
+          }
         }
-        return processed; // RETURN HANYA SEKALI DI AKHIR
-    }
+        return processed;
+      }
 
     function parse(tokens) { const output = [], operators = []; const precedence = { '+':1, '-':1, '*':2, '/':2, 'nPr':2, 'nCr':2, '^':3, 'UNARY':4, 'FACTORIAL':5 }; const rightAssoc = ['^', 'UNARY']; for (const token of tokens) { if (token.type === 'NUMBER' || token.type === 'DMS') output.push(token); else if (token.type === 'FUNCTION') operators.push(token); else if (token.type === 'OPERATOR') { while (operators.length) { const top = operators[operators.length - 1]; if (top.type === 'LPAREN') break; const topPrec = top.type === 'FUNCTION' ? 10 : (precedence[top.value] || precedence[top.type] || 0); const currPrec = precedence[token.value] || 0; if (topPrec > currPrec || (topPrec === currPrec && !['^', 'UNARY'].includes(token.value))) output.push(operators.pop()); else break; } operators.push(token); } else if (token.type === 'UNARY' || token.type === 'FACTORIAL') operators.push(token); else if (token.type === 'LPAREN') operators.push(token); else if (token.type === 'RPAREN') { while (operators.length && operators[operators.length - 1].type !== 'LPAREN') output.push(operators.pop()); if (!operators.length) throw new Error('Kurung tidak seimbang'); operators.pop(); if (operators.length && operators[operators.length - 1].type === 'FUNCTION') output.push(operators.pop()); } } while (operators.length) { const op = operators.pop(); if (op.type === 'LPAREN' || op.type === 'RPAREN') throw new Error('Kurung tidak seimbang'); output.push(op); } return output; }
 
@@ -1250,21 +1253,38 @@
     function insertText(text) {
         const funcs = ['sin', 'cos', 'tan', 'sin⁻¹', 'cos⁻¹', 'tan⁻¹', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'sqrt', 'cbrt', 'exp', 'pow10', 'abs', 'floor', 'ceil', 'round', '³√', '√'];
         const triggerReset = /^[\+\-\*\/\^]$/.test(text) || funcs.includes(text) || text === '(';
-        if (triggerReset && state.dmsInputMode) { state.dmsInputMode = false; state.dmsLevel = 1; }
-        if (state.justCalculated) {
-          const isNewCalculationStart = /^[0-9.]$/.test(text) && state.cursorPos === 0;
-          if (isNewCalculationStart) { state.inputBuffer = ''; state.cursorPos = 0; state.justCalculated = false; state.lastResultWasDMS = false; state.lastDMSString = ''; }
-          else if (triggerReset) { state.justCalculated = false; if (state.cursorPos === 0) state.cursorPos = state.inputBuffer.length; }
-          else { state.justCalculated = false; }
+
+        if (triggerReset && state.dmsInputMode) {
+          state.dmsInputMode = false;
+          state.dmsLevel = 1;
         }
-        if (/^[\+\-\*\/\^]$/.test(text) || text === '(') { state.dmsLevel = 1; }
+
+        if (state.justCalculated) {
+          const isOperator = /^[\+\-\*\/\^!]$/.test(text) || text === '×' || text === '÷' || text === '−';
+
+          if (isOperator) {
+            state.inputBuffer = 'Ans';
+            state.cursorPos = 3;
+          } else {
+            state.inputBuffer = '';
+            state.cursorPos = 0;
+          }
+          state.justCalculated = false;
+          state.lastResultWasDMS = false;
+          state.lastDMSString = '';
+        }
+
+        if (/^[\+\-\*\/\^]$/.test(text) || text === '(') {
+          state.dmsLevel = 1;
+        }
+
         const before = state.inputBuffer.substring(0, state.cursorPos);
         const after = state.inputBuffer.substring(state.cursorPos);
         state.inputBuffer = before + text + after;
         state.cursorPos += text.length;
         renderDisplay();
         displayDiv.focus();
-    }
+      }
     
     function deleteChar() { if (state.cursorPos > 0) { state.inputBuffer = state.inputBuffer.slice(0, state.cursorPos - 1) + state.inputBuffer.slice(state.cursorPos); state.cursorPos--; updateDisplay(); } }
     function clearAll() { state.inputBuffer = ''; state.cursorPos = 0; state.dmsInputMode = false; state.dmsLevel = 0; state.shift = false; state.alpha = false; resultDiv.textContent = '0'; updateDisplay(); }
