@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
+  <link rel="manifest" href="manifest.json">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>kalkulator Scientific Digital Patch 1.7</title>
@@ -1378,6 +1379,13 @@
     // ===== INISIALISASI =====
     updateDisplay();
 });
+</script>
+  <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => console.log('Service Worker terdaftar.'))
+      .catch((err) => console.log('Pendaftaran gagal:', err));
+  }
 </script>
 </body>
 </html>
