@@ -921,47 +921,68 @@
     document.addEventListener('DOMContentLoaded', function() {
 
     class DMSValue {
-      constructor(deg = 0, min = 0, sec = 0, sign = 1) {
-        this.deg = Math.floor(Math.abs(deg));
-        this.min = Math.floor(Math.abs(min));
-        this.sec = Math.abs(sec);
-        this.sign = sign < 0 ? -1 : 1;
-        this.normalize();
-      }
-      normalize() {
-        let totalSec = this.sec;
-        let extraMin = Math.floor(totalSec / 60);
-        this.sec = totalSec - extraMin * 60;
-        this.min += extraMin;
-        let totalMin = this.min;
-        let extraDeg = Math.floor(totalMin / 60);
-        this.min = totalMin - extraDeg * 60;
-        this.deg += extraDeg;
-        this.sec = Math.round(this.sec * 100) / 100;
-        if (this.sec >= 60) { this.sec -= 60; this.min += 1; }
-        if (this.min >= 60) { this.min -= 60; this.deg += 1; }
-      }
-      toDecimal() { const decimal = this.deg + (this.min / 60) + (this.sec / 3600); return this.sign * decimal; }
-      static fromDecimal(decimal) {
-        const v = Number(decimal);
-        const sign = v < 0 ? -1 : 1;
-        const abs = Math.abs(v);
+        constructor(deg = 0, min = 0, sec = 0, sign = 1) {
+          let d = Math.abs(deg);
+          let m = Math.abs(min);
+          let s = Math.abs(sec);
 
-        const totalSec = Math.round(abs * 3600 * 1e6) / 1e6;
+          // Distribusikan pecahan derajat ke menit
+          let dInt = Math.floor(d);
+          m += (d - dInt) * 60;
 
-        const deg = Math.floor(totalSec / 3600);
-        const min = Math.floor((totalSec % 3600) / 60);
-        const sec = (totalSec % 60);
+          // Distribusikan pecahan menit ke detik
+          let mInt = Math.floor(m);
+          s += (m - mInt) * 60;
 
-        return new DMSValue(deg, min, sec, sign);
+          this.deg = dInt;
+          this.min = mInt;
+          this.sec = s;
+          this.sign = sign < 0 ? -1 : 1;
+          this.normalize();
+        }
+        normalize() {
+          let totalSec = this.sec;
+          let extraMin = Math.floor(totalSec / 60);
+          this.sec = totalSec - extraMin * 60;
+          this.min += extraMin;
+          let totalMin = this.min;
+          let extraDeg = Math.floor(totalMin / 60);
+          this.min = totalMin - extraDeg * 60;
+          this.deg += extraDeg;
+          this.sec = Math.round(this.sec * 100) / 100;
+          if (this.sec >= 60) { this.sec -= 60; this.min += 1; }
+          if (this.min >= 60) { this.min -= 60; this.deg += 1; }
+        }
+        toDecimal() {
+          const decimal = this.deg + (this.min / 60) + (this.sec / 3600);
+          return this.sign * decimal;
+        }
+        static fromDecimal(decimal) {
+          // Ekstrak primitif dengan aman untuk mencegah hilangnya tanda negatif
+          const v = (decimal instanceof Decimal) ? decimal.toNumber() : Number(decimal);
+          const sign = v < 0 ? -1 : 1;
+          const abs = Math.abs(v);
+
+          const totalSec = Math.round(abs * 3600 * 1e6) / 1e6;
+
+          const deg = Math.floor(totalSec / 3600);
+          const min = Math.floor((totalSec % 3600) / 60);
+          const sec = (totalSec % 60);
+
+          return new DMSValue(deg, min, sec, sign);
+        }
+        toResultString() {
+          const sign = this.sign < 0 ? '-' : '';
+          if (this.sec === 0 && this.min === 0) return `${sign}${this.deg}°`;
+          if (this.sec === 0) return `${sign}${this.deg}°${this.min}'`;
+          return `${sign}${this.deg}°${this.min}'${this.sec}"`;
+        }
+        toString() { return this.toResultString(); }
+        add(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() + other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() + other); }
+        subtract(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() - other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() - other); }
+        multiply(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() * other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() * other); }
+        divide(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() / other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() / other); }
       }
-      toResultString() { const sign = this.sign < 0 ? '-' : ''; if (this.sec === 0 && this.min === 0) return `${sign}${this.deg}°`; if (this.sec === 0) return `${sign}${this.deg}°${this.min}'`; return `${sign}${this.deg}°${this.min}'${this.sec}"`; }
-      toString() { return this.toResultString(); }
-      add(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() + other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() + other); }
-      subtract(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() - other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() - other); }
-      multiply(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() * other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() * other); }
-      divide(other) { if (other instanceof DMSValue) return DMSValue.fromDecimal(this.toDecimal() / other.toDecimal()); return DMSValue.fromDecimal(this.toDecimal() / other); }
-    }
 
     // ==================== STATE MANAGEMENT (SAATU DEKLARASI) ====================
     const state = {
